@@ -25,11 +25,12 @@ def get_directory_path(title) -> str:
     return directory_path
 
 
-def pick_point_in_image(rim_dir, points, npoints=4):
+def pick_point_in_image(rim_dir, output_dir, points, npoints=4):
     """
     A function to pick the screen corners on the reference image,
     returns the corners points, and the ref image in openCV
     :param points:
+    :param output_dir: The output directory
     :param rim_dir: the directory of the reference image
     :param npoints: the number of corners to pick
     """
@@ -115,7 +116,7 @@ def pick_point_in_image(rim_dir, points, npoints=4):
 
     # Save points to a JSON file
     output_json_path = os.path.join(rim_dir,
-                                    os.path.join(r"C:\Maayan\First degree\fourth year\Project\dynamic_content_on_rim",
+                                    os.path.join(output_dir,
                                                  "points.json"))
     with open(output_json_path, 'w') as json_file:
         json.dump(points_list, json_file, indent=2)
@@ -123,7 +124,7 @@ def pick_point_in_image(rim_dir, points, npoints=4):
     # Save image to a JSON file
     output_json_path = os.path.join(rim_dir,
                                     os.path.join(
-                                        r"C:\Maayan\First degree\fourth year\Project\dynamic_content_on_rim",
+                                        output_dir,
                                         "image.json"))
     with open(output_json_path, 'w') as json_file:
         json.dump(image.tolist(), json_file)
@@ -131,7 +132,8 @@ def pick_point_in_image(rim_dir, points, npoints=4):
 
 def main():
     reference_image_dir = get_directory_path("Reference image directory")
-    pick_point_in_image(reference_image_dir, None)
+    output_dir = get_directory_path("output directory")
+    pick_point_in_image(reference_image_dir, output_dir, None)
 
 
 if __name__ == "__main__":
