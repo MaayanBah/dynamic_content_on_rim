@@ -40,11 +40,19 @@ def init_parser():
     )
 
     parser.add_argument(
-        "--out_csv_path",
+        "--out_gaze_csv_path",
         default=None,
         type=str,
         help="Path where to save the output CSV",
     )
+
+    parser.add_argument(
+        "--out_fixations_csv_path",
+        default=None,
+        type=str,
+        help="Path where to save the output CSV",
+    )
+
     parser.add_argument(
         "--audio",
         default="Device_Mic",

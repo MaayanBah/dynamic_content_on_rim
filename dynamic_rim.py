@@ -3,6 +3,8 @@ Python 3.10 Dynamic RIM Script
 This script is used to plot gaze over a video displayed on RIM
 enrichment eye tracking recording.
 """
+from enum import Enum
+from dataclasses import dataclass
 import glob
 import logging
 import os
@@ -26,6 +28,36 @@ from pupil_labs.dynamic_content_on_rim.uitools.ui_tools import (
     rich_df,
 )
 from pupil_labs.dynamic_content_on_rim.video.read import get_frame, read_video_ts
+
+
+class OutputType(Enum):
+    gaze = 1
+    fixations = 2
+
+@dataclass
+class OutputInfo:
+    output_type: OutputType
+    rim_df: pd.DataFrame
+    raw_df: pd.DataFrame
+    xy: None | pd.DataFrame
+    xy_transf: None | pd.DataFrame
+
+    @property
+    def rim_x_column_name(self):
+        return "gaze position in reference image x [px]" if self.output_type == OutputType.gaze else "fixation x [px]"
+
+    @property
+    def rim_y_column_name(self):
+        return "gaze position in reference image y [px]" if self.output_type == OutputType.gaze else "fixation y [px]"
+
+    @property
+    def transf_x_column_name(self):
+        return "gaze position transf x [px]" if self.output_type == OutputType.gaze else "fixation position transf x [px]"
+
+    @property
+    def transf_y_column_name(self):
+        return "gaze position transf y [px]" if self.output_type == OutputType.gaze else "fixation position transf y [px]"
+
 
 # Check if they are using a 64 bit architecture
 verbit = struct.calcsize("P") * 8
@@ -65,10 +97,16 @@ def main():
     gaze_rim_df = pd.read_csv(
         os.path.join(args.rim_folder_path, "gaze.csv"), dtype=oftype
     )
+    fixations_rim_df = pd.read_csv(
+        os.path.join(args.rim_folder_path, "fixations.csv"), dtype=oftype
+    )
+
     sections_rim_df = pd.read_csv(
         os.path.join(args.rim_folder_path, "sections.csv"), dtype=oftype
     )
+
     gaze_rim_df = pd.merge(gaze_rim_df, sections_rim_df)
+    fixations_rim_df = pd.merge(fixations_rim_df, sections_rim_df)
 
     # Read the world timestamps and gaze on ET
     logging.info("Reading world timestamps, events, and gaze on ET...")
@@ -83,10 +121,21 @@ def main():
     events_df = pd.read_csv(
         os.path.join(args.raw_folder_path, "events.csv"), dtype=oftype
     )
-    gaze_df = pd.read_csv(os.path.join(args.raw_folder_path, "gaze.csv"), dtype=oftype)
+
+    # Search for the raw data gaze and fixations df
+    gaze_raw_df = pd.read_csv(os.path.join(args.raw_folder_path, "gaze.csv"), dtype=oftype)
+    fixations_raw_df = pd.read_csv(os.path.join(args.raw_folder_path, "fixations.csv"), dtype=oftype)
+
+    gaze_data = OutputInfo(
+        OutputType.gaze, gaze_rim_df, gaze_raw_df, None, None
+    )
+    fixations_data = OutputInfo(
+        OutputType.fixations, fixations_rim_df, fixations_raw_df, None, None
+    )
 
     # Check if files belong to the same recording
-    gaze_rim_df = check_ids(gaze_df, world_timestamps_df, gaze_rim_df)
+    gaze_data.rim_df = check_ids(gaze_data, world_timestamps_df)
+    fixations_data.rim_df = check_ids(fixations_data, world_timestamps_df)
 
     # Read the videos
     files = glob.glob(os.path.join(args.raw_folder_path, "*.mp4"))
@@ -150,21 +199,36 @@ def main():
     # Transform the gaze points using M
     logging.info("Transforming the gaze points using M...")
     # Preparing data to transform
-    xy = np.expand_dims(
-        gaze_rim_df[
+    gaze_data.xy = np.expand_dims(
+        gaze_data.rim_df[
             [
-                "gaze position in reference image x [px]",
-                "gaze position in reference image y [px]",
+                gaze_data.rim_x_column_name,
+                gaze_data.rim_y_column_name
+            ]
+        ].to_numpy(dtype=np.float32),
+        axis=0,
+    )
+    fixations_data.xy = np.expand_dims(
+        fixations_data.rim_df[
+            [
+                fixations_data.rim_x_column_name,
+                fixations_data.rim_y_column_name
             ]
         ].to_numpy(dtype=np.float32),
         axis=0,
     )
     # Applying the perspective transform
-    xy_transf = cv2.perspectiveTransform(xy, M)
-    # Saving the transformed gaze points
-    gaze_rim_df[
-        ["gaze position transf x [px]", "gaze position transf y [px]"]
-    ] = pd.DataFrame(xy_transf[0]).set_index(gaze_rim_df.index)
+    gaze_data.xy_transf = cv2.perspectiveTransform(gaze_data.xy, M)
+    fixations_data.xy_transf = cv2.perspectiveTransform(fixations_data.xy, M)
+
+    # Saving the transformed gaze and fixation points
+    gaze_data.rim_df[
+        [gaze_data.transf_x_column_name, gaze_data.transf_y_column_name]
+    ] = pd.DataFrame(gaze_data.xy_transf[0]).set_index(gaze_data.rim_df.index)
+    fixations_data.rim_df[
+        [fixations_data.transf_x_column_name, fixations_data.transf_y_column_name]
+    ] = pd.DataFrame(fixations_data.xy_transf[0]).set_index(fixations_data.rim_df.index)
+
     # Get the patch of the screen
     mask = np.zeros(np.asarray(ref_img.shape)[0:2], dtype=np.uint8)
     cv2.fillPoly(
@@ -198,7 +262,7 @@ def main():
     end_video_ns = np.min(
         [np.max(sc_timestamps_ns), np.max(world_timestamps_df["timestamp [ns]"])]
     )
-    # Match the timestamps gaze_rim_df, world_timestamps_df, gaze_df, fake_timestamps_ns
+    # Match the timestamps gaze_rim_df, world_timestamps_df, gaze_raw_df, fake_timestamps_ns
     sc_video_df = pd.DataFrame()
     sc_video_df["frame"] = np.arange(sc_frames)
     sc_video_df["timestamp [ns]"] = sc_timestamps_ns
@@ -221,7 +285,7 @@ def main():
         None,
         et_video_df,
         gaze_rim_df.sort_values(by=["timestamp [ns]"]),
-        gaze_df,
+        gaze_raw_df,
         "_video",
         "_audio",
     )
@@ -234,7 +298,7 @@ def main():
             sc_video_df,
             et_video_df,
             gaze_rim_df.sort_values(by=["timestamp [ns]"]),
-            gaze_df,
+            gaze_raw_df,
             "_audio",
             "_video",
         )
@@ -250,7 +314,8 @@ def main():
     save_videos(args, merged, ref_img, _screen, merged_audio, audio)
     if args.saveCSV:
         logging.info("Saving CSV...")
-        gaze_rim_df.to_csv(get_savedir(args.out_csv_path, "csv"), index=True)
+        gaze_data.rim_df.to_csv(get_savedir(args.out_gaze_csv_path, "csv"), index=True)
+        fixations_data.rim_df.to_csv(get_savedir(args.out_fixations_csv_path, "csv"), index=True)
     logging.info("")
     logging.info("Executed in: %s seconds" % (time.time() - start_time))
     logging.info(
@@ -674,17 +739,17 @@ def prepare_image(frame, xy, str, corners_screen, _screen, mheight=0, alpha=0.3)
     return frame
 
 
-def check_ids(gaze_df, world_timestamps_df, gaze_rim_df):
+def check_ids(output_data: OutputInfo, world_timestamps_df):
     """
     Checks if the recording IDs of the gaze data and the world timestamps are the same.
-    :param gaze_df: The gaze data.
+    :param gaze_raw_df: The gaze data.
     :param world_timestamps_df: The world timestamps.
     :param gaze_rim_df: The gaze data from the RIM.
     returns gaze_rim_df with only the matching ID.
     """
-    g_ids = gaze_df["recording id"].unique()
+    g_ids = output_data.raw_df["recording id"].unique()
     w_ids = world_timestamps_df["recording id"].unique()
-    rim_ids = gaze_rim_df["recording id"].unique()
+    rim_ids = output_data.rim_df["recording id"].unique()
     if g_ids.shape[0] != 1 or w_ids.shape[0] != 1:
         error_base = f"None or more than one recording ID found "
         if g_ids.shape[0] != 1:
@@ -707,22 +772,22 @@ def check_ids(gaze_df, world_timestamps_df, gaze_rim_df):
             f"""Recording ID of RIM gaze data matches recording ID of the RAW data
             id: {ID} """
         )
-        isID = gaze_rim_df["recording id"] == ID
-        gaze_rim_df.drop(gaze_rim_df.loc[np.invert(isID)].index, inplace=True)
+        isID = output_data.rim_df["recording id"] == ID
+        output_data.rim_df.drop(output_data.rim_df.loc[np.invert(isID)].index, inplace=True)
         # removing NaNs from gaze rim data
-        gaze_rim_df.dropna(
+        output_data.rim_df.dropna(
             inplace=True,
             subset=[
-                "gaze position in reference image x [px]",
-                "gaze position in reference image y [px]",
+                output_data.rim_x_column_name,
+                output_data.rim_y_column_name
             ],
         )
-        if gaze_rim_df.empty:
+        if output_data.rim_df.empty:
             error = f"No valid gaze data in RIM gaze data for recording ID {ID}"
             logging.error(error)
             raise SystemExit(error)
-        rich_df(gaze_rim_df.head())
-    return gaze_rim_df
+        rich_df(output_data.rim_df.head())
+    return output_data.rim_df
 
 
 if __name__ == "__main__":
